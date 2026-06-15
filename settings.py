@@ -1,0 +1,4 @@
+BOT_TOKEN = "6917340994:AAGziOEhu-t_IsTWQlPPLxXmRv1nAGPW7BI"
+CHAT_ID = 6917340994
+
+CONFIG_PATH = "/opt/parser_avito/config.toml"

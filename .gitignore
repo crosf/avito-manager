@@ -1,0 +1,4 @@
+searches.db
+*.bak
+__pycache__/
+venv/
