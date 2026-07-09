@@ -100,11 +100,12 @@ def get_version_info():
 def update_parser():
     fetch_updates()
 
-    if has_local_changes():
-        raise ParserManagerError(
-            "В папке парсера есть локальные изменения. Обновление остановлено."
-        )
-
-    output = run_git_command("pull", "--ff-only", REMOTE_NAME, REMOTE_BRANCH)
+    output = run_git_command(
+        "pull",
+        "--ff-only",
+        "--autostash",
+        REMOTE_NAME,
+        REMOTE_BRANCH,
+    )
 
     return output or "Уже актуальная версия"
