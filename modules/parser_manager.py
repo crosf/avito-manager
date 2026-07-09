@@ -98,7 +98,16 @@ def get_version_info():
 
 
 def update_parser():
-    fetch_updates()
+    local_version = get_local_version()
+    latest_version = get_latest_version()
+
+    if local_version == latest_version:
+        return {
+            "updated": False,
+            "local_version": local_version,
+            "latest_version": latest_version,
+            "output": "Установлена актуальная версия. Обновление не требуется.",
+        }
 
     output = run_git_command(
         "pull",
@@ -108,4 +117,9 @@ def update_parser():
         REMOTE_BRANCH,
     )
 
-    return output or "Уже актуальная версия"
+    return {
+        "updated": True,
+        "local_version": get_local_version(),
+        "latest_version": latest_version,
+        "output": output or "Парсер обновлён",
+    }

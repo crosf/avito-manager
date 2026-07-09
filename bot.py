@@ -128,15 +128,23 @@ async def send_parser_version(message):
 async def update_parser_and_restart(message):
     try:
 
-        output = parser_manager.update_parser()
-        docker_manager.restart_parser()
-        info = parser_manager.get_version_info()
+        result = parser_manager.update_parser()
+        info = {
+            "local_version": result["local_version"],
+            "latest_version": result["latest_version"],
+            "update_available": result["local_version"] != result["latest_version"],
+        }
+
+        if result["updated"]:
+            docker_manager.restart_parser()
+            title = "✅ Парсер обновлён\n✅ Парсер перезапущен"
+        else:
+            title = "✅ Обновление не требуется\n✅ Парсер не перезапускался"
 
         await message.answer(
-            "✅ Парсер обновлён\n"
-            "✅ Парсер перезапущен\n\n"
+            f"{title}\n\n"
             f"{format_version_message(info)}\n\n"
-            f"Git:\n{output}",
+            f"Git:\n{result['output']}",
             reply_markup=get_main_keyboard()
         )
 
