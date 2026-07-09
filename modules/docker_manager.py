@@ -16,3 +16,16 @@ def restart_parser():
 def get_parser_status():
     container = get_container()
     return container.status
+
+
+def get_parser_logs(tail=50):
+    container = get_container()
+    logs = container.logs(
+        tail=tail,
+        timestamps=True,
+    )
+
+    return logs.decode(
+        "utf-8",
+        errors="replace"
+    ).strip()

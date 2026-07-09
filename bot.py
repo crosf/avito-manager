@@ -1,4 +1,5 @@
 import asyncio
+import html
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -48,6 +49,10 @@ async def set_commands():
             command="update",
             description="Обновить парсер"
         ),
+        BotCommand(
+            command="logs",
+            description="Логи парсера"
+        ),
     ]
 
     await bot.set_my_commands(commands)
@@ -83,6 +88,11 @@ def get_main_keyboard():
     builder.button(
         text="📊 Статус парсера",
         callback_data="status"
+    )
+
+    builder.button(
+        text="📜 Логи парсера",
+        callback_data="logs"
     )
 
     builder.button(
@@ -154,6 +164,41 @@ async def update_parser_and_restart(message):
             f"❌ Ошибка обновления парсера:\n{e}"
         )
 
+
+def format_logs_message(logs):
+    if not logs:
+        logs = "Логи пустые"
+
+    max_length = 3500
+
+    if len(logs) > max_length:
+        logs = logs[-max_length:]
+
+    escaped_logs = html.escape(logs)
+
+    return (
+        "📜 Логи парсера\n\n"
+        f"<pre>{escaped_logs}</pre>"
+    )
+
+
+async def send_parser_logs(message):
+    try:
+
+        logs = docker_manager.get_parser_logs()
+
+        await message.answer(
+            format_logs_message(logs),
+            parse_mode="HTML",
+            reply_markup=get_main_keyboard()
+        )
+
+    except Exception as e:
+
+        await message.answer(
+            f"❌ Ошибка получения логов:\n{e}"
+        )
+
 @dp.message(Command("start"))
 async def start(message: Message):
 
@@ -220,6 +265,15 @@ async def update_command(message: Message):
         return
 
     await update_parser_and_restart(message)
+
+
+@dp.message(Command("logs"))
+async def logs_command(message: Message):
+
+    if not is_admin(message.from_user.id):
+        return
+
+    await send_parser_logs(message)
 
 @dp.callback_query(F.data == "add")
 async def add_search(callback: CallbackQuery):
@@ -407,6 +461,18 @@ async def update_parser(callback: CallbackQuery):
         return
 
     await update_parser_and_restart(callback.message)
+
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "logs")
+async def parser_logs(callback: CallbackQuery):
+
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён")
+        return
+
+    await send_parser_logs(callback.message)
 
     await callback.answer()
 
