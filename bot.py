@@ -1,5 +1,3 @@
-import sqlite3
-import docker
 import asyncio
 
 from aiogram import Bot, Dispatcher, F
@@ -13,6 +11,9 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from settings import BOT_TOKEN
 from config_generator import generate_config
+from modules import database
+from modules import docker_manager
+from modules import parser_manager
 
 ADMIN_ID = 434877678
 
@@ -20,7 +21,6 @@ bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
 waiting_for_url = set()
-
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
@@ -40,16 +40,17 @@ async def set_commands():
             command="reload",
             description="Перезапустить парсер"
         ),
+        BotCommand(
+            command="version",
+            description="Версия парсера"
+        ),
+        BotCommand(
+            command="update",
+            description="Обновить парсер"
+        ),
     ]
 
     await bot.set_my_commands(commands)
-
-
-def restart_parser():
-    client = docker.from_env()
-    container = client.containers.get("avito")
-    container.restart()
-
 
 def get_main_keyboard():
     builder = InlineKeyboardBuilder()
@@ -70,6 +71,16 @@ def get_main_keyboard():
     )
 
     builder.button(
+        text="📦 Версия парсера",
+        callback_data="version"
+    )
+
+    builder.button(
+        text="⬆️ Обновить парсер",
+        callback_data="update"
+    )
+
+    builder.button(
         text="📊 Статус парсера",
         callback_data="status"
     )
@@ -83,6 +94,57 @@ def get_main_keyboard():
 
     return builder.as_markup()
 
+def format_version_message(info):
+    if info["update_available"]:
+        status = "⬆️ Доступно обновление"
+    else:
+        status = "✅ Установлена актуальная версия"
+
+    return (
+        "📦 Версия парсера\n\n"
+        f"Текущая версия: {info['local_version']}\n"
+        f"Последняя версия: {info['latest_version']}\n"
+        f"Статус: {status}"
+    )
+
+
+async def send_parser_version(message):
+    try:
+
+        info = parser_manager.get_version_info()
+
+        await message.answer(
+            format_version_message(info),
+            reply_markup=get_main_keyboard()
+        )
+
+    except Exception as e:
+
+        await message.answer(
+            f"❌ Ошибка проверки версии:\n{e}"
+        )
+
+
+async def update_parser_and_restart(message):
+    try:
+
+        output = parser_manager.update_parser()
+        docker_manager.restart_parser()
+        info = parser_manager.get_version_info()
+
+        await message.answer(
+            "✅ Парсер обновлён\n"
+            "✅ Парсер перезапущен\n\n"
+            f"{format_version_message(info)}\n\n"
+            f"Git:\n{output}",
+            reply_markup=get_main_keyboard()
+        )
+
+    except Exception as e:
+
+        await message.answer(
+            f"❌ Ошибка обновления парсера:\n{e}"
+        )
 
 @dp.message(Command("start"))
 async def start(message: Message):
@@ -95,23 +157,13 @@ async def start(message: Message):
         reply_markup=get_main_keyboard()
     )
 
-
 @dp.message(Command("list"))
 async def list_command(message: Message):
 
     if not is_admin(message.from_user.id):
         return
 
-    conn = sqlite3.connect("searches.db")
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT id, url FROM searches"
-    )
-
-    rows = cur.fetchall()
-
-    conn.close()
+    rows = database.get_searches()
 
     if not rows:
         await message.answer("Поисков нет")
@@ -124,7 +176,6 @@ async def list_command(message: Message):
 
     await message.answer(text)
 
-
 @dp.message(Command("reload"))
 async def reload_command(message: Message):
 
@@ -134,7 +185,7 @@ async def reload_command(message: Message):
     try:
 
         generate_config()
-        restart_parser()
+        docker_manager.restart_parser()
 
         await message.answer(
             "✅ Конфиг обновлён\n✅ Парсер перезапущен"
@@ -146,6 +197,21 @@ async def reload_command(message: Message):
             f"❌ Ошибка:\n{e}"
         )
 
+@dp.message(Command("version"))
+async def version_command(message: Message):
+
+    if not is_admin(message.from_user.id):
+        return
+
+    await send_parser_version(message)
+
+@dp.message(Command("update"))
+async def update_command(message: Message):
+
+    if not is_admin(message.from_user.id):
+        return
+
+    await update_parser_and_restart(message)
 
 @dp.callback_query(F.data == "add")
 async def add_search(callback: CallbackQuery):
@@ -164,7 +230,6 @@ async def add_search(callback: CallbackQuery):
 
     await callback.answer()
 
-
 @dp.message()
 async def save_url(message: Message):
 
@@ -180,19 +245,10 @@ async def save_url(message: Message):
 
     url = message.text.strip()
 
-    conn = sqlite3.connect("searches.db")
-    cur = conn.cursor()
-
-    cur.execute(
-        "INSERT INTO searches(url) VALUES(?)",
-        (url,)
-    )
-
-    conn.commit()
-    conn.close()
+    database.add_search(url)
 
     generate_config()
-    restart_parser()
+    docker_manager.restart_parser()
 
     await message.answer(
         "✅ Поиск добавлен\n"
@@ -201,7 +257,6 @@ async def save_url(message: Message):
         reply_markup=get_main_keyboard()
     )
 
-
 @dp.callback_query(F.data == "list")
 async def list_searches(callback: CallbackQuery):
 
@@ -209,16 +264,7 @@ async def list_searches(callback: CallbackQuery):
         await callback.answer("⛔ Доступ запрещён")
         return
 
-    conn = sqlite3.connect("searches.db")
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT id, url FROM searches"
-    )
-
-    rows = cur.fetchall()
-
-    conn.close()
+    rows = database.get_searches()
 
     if not rows:
         await callback.message.answer(
@@ -237,7 +283,6 @@ async def list_searches(callback: CallbackQuery):
 
     await callback.answer()
 
-
 @dp.callback_query(F.data == "delete")
 async def delete_menu(callback: CallbackQuery):
 
@@ -245,16 +290,7 @@ async def delete_menu(callback: CallbackQuery):
         await callback.answer("⛔ Доступ запрещён")
         return
 
-    conn = sqlite3.connect("searches.db")
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT id, url FROM searches"
-    )
-
-    rows = cur.fetchall()
-
-    conn.close()
+    rows = database.get_searches()
 
     if not rows:
 
@@ -290,7 +326,6 @@ async def delete_menu(callback: CallbackQuery):
 
     await callback.answer()
 
-
 @dp.callback_query(F.data.startswith("del_"))
 async def delete_search(callback: CallbackQuery):
 
@@ -305,19 +340,10 @@ async def delete_search(callback: CallbackQuery):
         )
     )
 
-    conn = sqlite3.connect("searches.db")
-    cur = conn.cursor()
-
-    cur.execute(
-        "DELETE FROM searches WHERE id=?",
-        (search_id,)
-    )
-
-    conn.commit()
-    conn.close()
+    database.delete_search(search_id)
 
     generate_config()
-    restart_parser()
+    docker_manager.restart_parser()
 
     await callback.message.answer(
         "✅ Поиск удалён\n"
@@ -327,7 +353,6 @@ async def delete_search(callback: CallbackQuery):
     )
 
     await callback.answer()
-
 
 @dp.callback_query(F.data == "reload")
 async def reload_parser(callback: CallbackQuery):
@@ -339,7 +364,7 @@ async def reload_parser(callback: CallbackQuery):
     try:
 
         generate_config()
-        restart_parser()
+        docker_manager.restart_parser()
 
         await callback.message.answer(
             "✅ Конфиг обновлён\n"
@@ -355,6 +380,27 @@ async def reload_parser(callback: CallbackQuery):
 
     await callback.answer()
 
+@dp.callback_query(F.data == "version")
+async def parser_version(callback: CallbackQuery):
+
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён")
+        return
+
+    await send_parser_version(callback.message)
+
+    await callback.answer()
+
+@dp.callback_query(F.data == "update")
+async def update_parser(callback: CallbackQuery):
+
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён")
+        return
+
+    await update_parser_and_restart(callback.message)
+
+    await callback.answer()
 
 @dp.callback_query(F.data == "status")
 async def parser_status(callback: CallbackQuery):
@@ -365,24 +411,13 @@ async def parser_status(callback: CallbackQuery):
 
     try:
 
-        client = docker.from_env()
-        container = client.containers.get("avito")
-
-        conn = sqlite3.connect("searches.db")
-        cur = conn.cursor()
-
-        cur.execute(
-            "SELECT COUNT(*) FROM searches"
-        )
-
-        count = cur.fetchone()[0]
-
-        conn.close()
+        status = docker_manager.get_parser_status()
+        count = database.count_searches()
 
         await callback.message.answer(
             f"📊 Статус парсера\n\n"
             f"Контейнер: avito\n"
-            f"Статус: {container.status}\n"
+            f"Статус: {status}\n"
             f"Поисков: {count}"
         )
 
