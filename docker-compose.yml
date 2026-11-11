@@ -1,0 +1,16 @@
+services:
+  avito_manager:
+    container_name: avito_manager
+    build: .
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    volumes:
+      - ./searches.db:/app/searches.db
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/parser_avito:/opt/parser_avito
+
+    environment:
+      - TZ=Europe/Moscow

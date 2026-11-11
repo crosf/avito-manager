@@ -1,0 +1,8 @@
+searches.db
+*.bak
+__pycache__/
+venv/
+.env
+*.log
+.idea/
+.vscode/
