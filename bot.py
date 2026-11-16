@@ -49,6 +49,7 @@ dp = Dispatcher()
 async def set_commands():
     commands = [
         BotCommand(command="start", description="Главное меню"),
+        BotCommand(command="status", description="Статус и управление парсером"),
         BotCommand(command="list", description="Мои поиски"),
         BotCommand(command="interval", description="Интервал опроса"),
         BotCommand(command="reload", description="Перезапустить парсер"),
@@ -582,32 +583,139 @@ async def reload_parser_action(event):
         await event.answer()
 
 
-# --- Статус парсера ---
+# --- Статус и управление парсером ---
+async def render_status_screen(target, is_callback: bool = True):
+    status_raw = await asyncio.to_thread(docker_manager.get_parser_status)
+    total = await asyncio.to_thread(database.count_searches, False)
+    active = await asyncio.to_thread(database.count_searches, True)
+    interval_info = await asyncio.to_thread(get_current_interval)
+
+    if status_raw == "running":
+        status_display = "🟢 <b>Работает (running)</b>"
+    elif status_raw in ("exited", "stopped"):
+        status_display = "⏸ <b>Остановлен (stopped)</b>"
+    elif status_raw == "restarting":
+        status_display = "🔄 <b>Перезапускается (restarting)</b>"
+    elif status_raw == "not_found":
+        status_display = "⚠️ <b>Контейнер не найден</b>"
+    else:
+        status_display = f"⚠️ <b>{html.escape(str(status_raw))}</b>"
+
+    text = (
+        f"📊 <b>Статус и управление парсером</b>\n\n"
+        f"🐳 Контейнер: <code>{html.escape(docker_manager.PARSER_CONTAINER_NAME)}</code>\n"
+        f"⚙️ Состояние: {status_display}\n"
+        f"⏱ Интервал опроса: <b>{interval_info['human']}</b>\n"
+        f"🔍 Активных поисков: <b>{active}</b> из {total}\n\n"
+        "<i>Используйте кнопки ниже для запуска или остановки:</i>"
+    )
+
+    builder = InlineKeyboardBuilder()
+
+    if status_raw == "running":
+        builder.button(text="⏹ Остановить парсер", callback_data="stop_parser")
+        builder.button(text="🔄 Перезапустить", callback_data="restart_from_status")
+    elif status_raw in ("exited", "stopped"):
+        builder.button(text="▶️ Запустить парсер", callback_data="start_parser")
+    else:
+        builder.button(text="▶️ Запустить", callback_data="start_parser")
+        builder.button(text="⏹ Остановить", callback_data="stop_parser")
+
+    builder.button(text="🔄 Обновить статус", callback_data="status")
+    builder.button(text="📋 Логи", callback_data="logs")
+    builder.button(text="🔙 Главное меню", callback_data="back_to_main")
+
+    builder.adjust(2, 2, 1)
+
+    try:
+        if is_callback:
+            await target.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
+        else:
+            await target.answer(text, parse_mode="HTML", reply_markup=builder.as_markup())
+    except Exception as e:
+        if "message is not modified" in str(e).lower():
+            pass
+        else:
+            raise
+
+
+@dp.message(Command("status"))
+async def status_command(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.clear()
+    await render_status_screen(message, is_callback=False)
+
+
 @dp.callback_query(F.data == "status")
-async def parser_status_cb(callback: CallbackQuery):
+async def parser_status_cb(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await state.clear()
+    await render_status_screen(callback.message, is_callback=True)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "stop_parser")
+async def stop_parser_cb(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
     try:
-        status = await asyncio.to_thread(docker_manager.get_parser_status)
-        total = await asyncio.to_thread(database.count_searches, False)
-        active = await asyncio.to_thread(database.count_searches, True)
-        interval_info = await asyncio.to_thread(get_current_interval)
+        await callback.message.edit_text("⏳ Останавливаем парсер...")
+    except Exception:
+        pass
 
-        await callback.message.answer(
-            f"📊 <b>Статус парсера</b>\n\n"
-            f"🐳 Контейнер: <code>avito</code>\n"
-            f"⚙️ Состояние: <b>{html.escape(str(status))}</b>\n"
-            f"⏱ Интервал опроса: <b>{interval_info['human']}</b>\n"
-            f"🟢 Активных поисков: <b>{active}</b> (всего в базе: {total})",
-            parse_mode="HTML",
-            reply_markup=get_main_keyboard()
-        )
+    try:
+        await asyncio.to_thread(docker_manager.stop_parser)
+        await callback.answer("⏹ Парсер успешно остановлен!", show_alert=False)
     except Exception as e:
-        await callback.message.answer(f"❌ Ошибка:\n<code>{html.escape(str(e))}</code>", parse_mode="HTML")
+        await callback.answer(f"❌ Ошибка остановки: {e}", show_alert=True)
 
-    await callback.answer()
+    await render_status_screen(callback.message, is_callback=True)
+
+
+@dp.callback_query(F.data == "start_parser")
+async def start_parser_cb(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    try:
+        await callback.message.edit_text("⏳ Запускаем парсер...")
+    except Exception:
+        pass
+
+    try:
+        await asyncio.to_thread(docker_manager.start_parser)
+        await callback.answer("▶️ Парсер успешно запущен!", show_alert=False)
+    except Exception as e:
+        await callback.answer(f"❌ Ошибка запуска: {e}", show_alert=True)
+
+    await render_status_screen(callback.message, is_callback=True)
+
+
+@dp.callback_query(F.data == "restart_from_status")
+async def restart_from_status_cb(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    try:
+        await callback.message.edit_text("⏳ Перезапускаем парсер...")
+    except Exception:
+        pass
+
+    try:
+        await asyncio.to_thread(generate_config)
+        await asyncio.to_thread(docker_manager.restart_parser)
+        await callback.answer("🔄 Парсер перезапущен!", show_alert=False)
+    except Exception as e:
+        await callback.answer(f"❌ Ошибка перезапуска: {e}", show_alert=True)
+
+    await render_status_screen(callback.message, is_callback=True)
 
 
 # --- Логи парсера ---

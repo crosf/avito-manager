@@ -16,14 +16,34 @@ def restart_parser():
     container.restart()
 
 
+def stop_parser():
+    container = get_container()
+    if container.status == "running":
+        container.stop()
+
+
+def start_parser():
+    container = get_container()
+    if container.status != "running":
+        container.start()
+
+
 def get_parser_status() -> str:
     try:
         container = get_container()
         return container.status
     except docker.errors.NotFound:
-        return "не найден (not found)"
+        return "not_found"
     except Exception as e:
-        return f"ошибка: {e}"
+        return f"error: {e}"
+
+
+def is_parser_running() -> bool:
+    try:
+        container = get_container()
+        return container.status == "running"
+    except Exception:
+        return False
 
 
 def get_parser_logs(tail: int = 40) -> str:
